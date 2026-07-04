@@ -1,0 +1,61 @@
+// Prisma schema — state store for the Morning Briefing Analyser.
+// These tables make each run idempotent, resumable, and history-aware.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// One row per pipeline run — used for resumability + the "since last brief" watermark.
+model RunLog {
+  id           String    @id @default(cuid())
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  status       String    @default("running") // running | success | partial | failed
+  watermark    DateTime? // the "since" timestamp this run used
+  itemCount    Int       @default(0)
+  errorSummary String?
+
+  @@index([startedAt])
+}
+
+/// Dedupe surfaced items across runs so nothing is reported twice.
+model SeenItem {
+  id           String   @id @default(cuid())
+  source       String   // slack | jira | gmail
+  externalId   String   // channel:ts, ticket key, message id, etc.
+  firstSeen    DateTime @default(now())
+  lastActivity DateTime
+
+  @@unique([source, externalId])
+  @@index([source])
+}
+
+/// Cached rolling summary per active Jira ticket — refreshed only when the ticket changed.
+model TicketContext {
+  ticketKey   String   @id
+  summaryJson  Json
+  updatedAt   DateTime @updatedAt
+}
+
+/// Cached rolling summary per Slack thread I participate in.
+model ThreadContext {
+  id          String   @id @default(cuid())
+  channelId   String
+  threadTs    String
+  summaryJson Json
+  updatedAt   DateTime @updatedAt
+
+  @@unique([channelId, threadTs])
+}
+
+/// An unread email that persists across days is surfaced once — never re-marked read.
+model EmailSeen {
+  messageId String   @id
+  threadId  String?
+  firstSeen DateTime @default(now())
+}
