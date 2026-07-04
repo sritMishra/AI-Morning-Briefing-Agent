@@ -1,9 +1,7 @@
 # Morning Briefing Analyser
 
-> Single source of truth for this project — merges the original requirements
-> and the agreed technical approach into one plan with phases.
-> Companion drafts `requirement.md` and `technical-approach.md` remain in the
-> repo as history; **this file is authoritative.**
+> Single source of truth for this project — the full requirements, technical
+> approach, and phased plan in one place. **This file is authoritative.**
 
 ---
 
@@ -271,11 +269,8 @@ read-only OAuth (approved); Jira Cloud (`anatta-io.atlassian.net`, project
 
 ```
 morning-briefing-agent/
-├── CLAUDE.md                 ← this file (authoritative)
-├── requirement.md            ← original requirements (history)
-├── technical-approach.md     ← technical approach draft (history)
+├── CLAUDE.md                 ← this file (authoritative plan)
 ├── package.json              ← npm workspaces root
-├── .env.example
 └── packages/
     ├── server/               ← Node + Express + Prisma + AI SDK (the analyser)
     │   ├── prisma/schema.prisma
