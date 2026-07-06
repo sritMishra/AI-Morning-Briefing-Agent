@@ -50,14 +50,18 @@ brief delivered before you open your laptop.
 - Filter out `@here`/`@channel` broadcasts unless directly relevant.
 - Look back: last 24h (or since last brief).
 
-### 2. Jira (highest priority) — **Jira Cloud, `anatta-io.atlassian.net`**
-- Tickets assigned to me: status changes, comments, attachments, links in
-  the last 24h.
-- Tickets where I'm mentioned in a comment.
-- Newly assigned tickets since yesterday's brief.
-- Sprint board: what's due soon, what's blocked.
-- Look back: last 24h + full history of active tickets for context.
-- Known context: project key **`EA`**, board **`1156`** (extendable).
+### 2. Jira (highest priority) — **Jira Cloud, project `EA` only**
+Scoped to the **Edible Arrangements (`EA`)** project. Two distinct views:
+- **Board focus** = tickets assigned to me in the **active sprint**
+  (`sprint IN openSprints()`), grouped: In Progress / Blocked / Overdue /
+  Due Soon / New Today (Done is skipped).
+- **Change notes** = **any** EA ticket assigned to me that changed in the
+  window — *in or out of the active sprint* — so backlog/other-sprint updates
+  aren't missed. Each is tagged with its sprint membership + a "what changed"
+  summary from the changelog.
+- Look back: last 24h (→ real watermark later) + changelog for context.
+- Config: `JIRA_PROJECT_KEYS=EA`. Active sprint resolved via JQL
+  `openSprints()` (avoids the extra Agile-API scopes).
 
 ### 3. Gmail (Phase 1 — **unread emails only**)
 - Reads only **unread ("unopened") emails** (`is:unread`), treated as a
@@ -74,8 +78,23 @@ brief delivered before you open your laptop.
 
 **Context awareness — history, not just today.** For each active Jira ticket:
 original requirement → last week's discussion → last decision → current
-blocker/open question → what changed in 24h. For each Slack thread: original
-question → current state → does it need my input.
+blocker/open question → what changed in 24h (incl. **new comments**). For each
+Slack thread: original question → current state → does it need my input.
+A new comment must be *explained* ("X commented, here's what it means for this
+ticket"), not just flagged.
+
+**Cross-source correlation — connect the dots (the key differentiator).**
+The brief should weave sources together per topic, not list them in silos:
+- A new Jira comment should be related to the ticket's own prior history.
+- If a Slack message references the same ticket/topic, surface it *alongside*
+  the ticket so I get one connected picture.
+- Two levels of linking:
+  1. **Explicit** — a Slack/email message names the ticket (e.g. "EA-2729").
+     Cheap string match; available once Slack/Gmail land (Phase 1/2).
+  2. **Semantic/topical** — related discussion that never names the ticket.
+     Needs embeddings → **pgvector (Phase 3)**.
+This correlation is done by the AI layer (pipeline steps 5-6), never by the
+connectors, which only supply raw material.
 
 **Relevance filtering (Slack + Gmail):**
 - **HIGH** — direct @mention / email with a question or action for me.
@@ -83,6 +102,23 @@ question → current state → does it need my input.
 - **LOW / SKIP** — `@here`/`@channel` broadcasts or newsletters with no
   action for me. *Always reported ("filtered N items") — never silently
   dropped.*
+
+**Section-1 trigger.** A ticket enters "changed in last 24h" if EITHER a field
+change (due date, description, status… — *any* author, including me) OR a
+comment by someone *other than me* landed in the window. My own comments are
+noise and don't trigger; my own field changes do.
+
+**Prioritisation rules (Jira) — critical/urgent criteria.** A ticket is
+`urgent` ONLY if: (a) its due date is **today or already past**, (b) a comment
+requires an urgent action from me, or (c) a question (from anyone) has been
+unanswered by me for > 1 day. Being merely in-progress or due-soon is NOT urgent.
+**Blocked tickets** (status contains "block" OR a `Blocked`/`EA_BLOCK` label)
+are NEVER urgent — instead they're listed under important/fyi with a short
+"blocked for <reason>" note (reason inferred from comments). If a blocked
+ticket is *also* overdue, it stays non-urgent but gets a recommendation entry
+flagging "overdue AND blocked" so it isn't lost. To judge (c), the
+connector supplies dated comments over a 3-day look-back and the user's own
+display name.
 
 **Recommendations — not just summaries.** For each surfaced item: what
 action I likely need to take, whether it's urgent-today or can wait, what
@@ -93,26 +129,24 @@ needs my reply. The recommendation is a suggestion; I make the final call.
 
 ## 5. Output — the morning brief
 
-Delivered via **email + Slack DM** at **10:15 AM daily**.
+Delivered via **email + Slack DM** at **10:15 AM daily**. Two sections:
 
 ```
-MORNING BRIEF — [Day, Date]   (Generated 10:15 AM)
+MORNING BRIEF — [Day, Date]
 
-🔴 URGENT — Needs attention today
-[Item] Source · What happened · Recommended action · Link
+=== SECTION 1 — CHANGED IN LAST 24h ===
+(only tickets changed by someone OTHER than me — my own updates ignored)
+🔴 URGENT       [item] summary (what changed + what's asked) · action · link
+🟡 IMPORTANT    [item] ...
+⚪ NOT IMPORTANT [item] ...
+(each item: AI reads the full comment thread, works out what's asked, categorises)
 
-🟡 IMPORTANT — Review today
-[Item] What changed · Context (brief history) · Recommended action · Link
-
-🟢 FYI — No action needed
-- one-liners; filtered Slack broadcasts / emails listed so I know they were seen
-
-📋 TODAY'S JIRA BOARD
-In Progress / Blocked (reason) / Due Soon (next 2 days) / New Today
-
-💡 RECOMMENDATIONS
-Suggested priority order for the day (task — reason), by urgency + dependencies
+=== SECTION 2 — TODAY'S BOARD (EA · active sprint) ===
+Table:  Ticket | Status (exact) | Recommendation (AI, one line)
 ```
+
+Categorisation + blocked rules per §4. Board status is deterministic; only
+the recommendation column is AI-written.
 
 ---
 
@@ -191,6 +225,16 @@ connectors and briefing pipeline are new.
 - `ThreadContext` — same for Slack threads I participate in.
 - `EmailSeen` — an email that stays unread is surfaced once, never re-marked.
 
+### Trigger modes (both share one pipeline)
+The exact same `runBrief()` pipeline can be fired two ways:
+1. **Automatic (scheduled):** `node-cron` fires it at 10:15 AM daily → delivers
+   email + Slack DM. The unattended default.
+2. **Manual (on-demand):** a **"Run brief now" button** in the dashboard calls
+   `POST /brief/run`, which runs the identical pipeline immediately and returns
+   the result — so I can pull the latest inflow from all connectors anytime
+   without waiting for the schedule (useful for testing and for an ad-hoc
+   mid-day catch-up). Both paths are read-only.
+
 ---
 
 ## 8. API requirements per source
@@ -204,9 +248,12 @@ connectors and briefing pipeline are new.
   `groups:read`, `chat:write`, `im:write`/`conversations.open`.
 
 ### Jira (Cloud)
-- Base URL `https://anatta-io.atlassian.net`, REST **v3**.
-- Auth: `JIRA_EMAIL` + `JIRA_API_TOKEN` (Basic). Token from
-  `id.atlassian.com → Security → API tokens`.
+- Auth: `JIRA_EMAIL` + **scoped** `JIRA_API_TOKEN` (Basic), scopes
+  `read:jira-work` + `read:jira-user` (read-only, no write scopes ever).
+- ⚠️ **Scoped tokens must use the gateway, not the site URL.** They fail to
+  authenticate against `anatta-io.atlassian.net`; requests go to
+  `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3`. The cloudId is
+  auto-resolved from `{JIRA_BASE_URL}/_edge/tenant_info` (or set `JIRA_CLOUD_ID`).
 - Endpoints: `/rest/api/3/search` (JQL), `/issue/{key}?expand=changelog`,
   `/issue/{key}/comment`, `/rest/agile/1.0/board/{id}/sprint` + `/issue`,
   `/myself`.

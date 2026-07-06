@@ -19,6 +19,10 @@ export interface BriefItem {
   rawContext: string; // the text we feed the LLM
   lastActivityTs: string; // ISO
   participants?: string[];
+  /** True if this item is blocked — used to deterministically keep it out of urgent. */
+  blocked?: boolean;
+  /** True if due today or already past — used to deterministically force it urgent. */
+  dueUrgent?: boolean;
 }
 
 /** Zod schema for the LLM's structured brief output (used with generateObject). */
@@ -31,19 +35,35 @@ export const briefItemOutputSchema = z.object({
   link: z.string().optional(),
 });
 
-export const briefOutputSchema = z.object({
+/**
+ * SECTION 2 — board table row. Status is deterministic (set from Jira in code);
+ * only `recommendation` is written by the LLM.
+ */
+export const boardRowSchema = z.object({
+  ticket: z.string(),
+  status: z.string(),
+  recommendation: z.string(),
+});
+export type BoardRow = z.infer<typeof boardRowSchema>;
+
+/**
+ * What the LLM returns via generateObject:
+ *  - Section 1: changed-in-24h tickets categorised urgent/important/notImportant.
+ *  - `boardRecommendations`: one recommendation per active-sprint ticket (keyed
+ *    by ticket) — merged with deterministic status in code to build the table.
+ */
+export const analysisOutputSchema = z.object({
   urgent: z.array(briefItemOutputSchema),
   important: z.array(briefItemOutputSchema),
-  fyi: z.array(z.string()).describe('one-liners, including counts of filtered items'),
-  jiraBoard: z.object({
-    inProgress: z.array(z.string()),
-    blocked: z.array(z.string()),
-    dueSoon: z.array(z.string()),
-    newToday: z.array(z.string()),
-  }),
-  recommendations: z
-    .array(z.object({ task: z.string(), reason: z.string() }))
-    .describe('suggested priority order for the day'),
+  notImportant: z.array(briefItemOutputSchema),
+  boardRecommendations: z.array(z.object({ ticket: z.string(), recommendation: z.string() })),
 });
+export type AnalysisOutput = z.infer<typeof analysisOutputSchema>;
 
-export type BriefOutput = z.infer<typeof briefOutputSchema>;
+/** The full brief: Section 1 (categorised changes) + Section 2 (board table). */
+export interface BriefOutput {
+  urgent: z.infer<typeof briefItemOutputSchema>[];
+  important: z.infer<typeof briefItemOutputSchema>[];
+  notImportant: z.infer<typeof briefItemOutputSchema>[];
+  board: BoardRow[];
+}

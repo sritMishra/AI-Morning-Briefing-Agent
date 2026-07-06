@@ -1,64 +1,85 @@
-import { collectGmailItems } from '../connectors/gmail.connector.js';
-import { collectJiraItems } from '../connectors/jira.connector.js';
-import { collectSlackItems } from '../connectors/slack.connector.js';
+import type { BoardTicket } from '../connectors/jira.connector.js';
 import { logger } from '../lib/logger.js';
-import type { BriefItem, BriefOutput } from '../types/index.js';
+import { llmAvailable } from '../services/analyze.service.js';
+import { type RenderedBrief, renderBrief } from '../services/render.service.js';
+import type { BriefOutput } from '../types/index.js';
+import { analyseAndGuard } from './steps/analyse.step.js';
+import { collectBoard } from './steps/collectBoard.step.js';
+import { collectChanges } from './steps/collectChanges.step.js';
+import { resolveWatermark } from './steps/watermark.step.js';
 
 export interface RunBriefResult {
   status: 'success' | 'partial' | 'failed';
   itemCount: number;
   errors: string[];
+  /** Raw Section-1 items (fallback view when no LLM key). */
+  preview?: { source: string; title: string; url?: string }[];
+  /** Active-sprint board rows (Section 2 raw data). */
+  board?: BoardTicket[];
   brief?: BriefOutput;
+  /** The brief rendered for delivery (email + Slack DM), present when analysed. */
+  rendered?: RenderedBrief;
 }
 
 /**
- * The orchestrator — one full run of the morning-briefing pipeline.
+ * ORCHESTRATOR — one full run of the morning-briefing pipeline.
  *
- * Steps (see CLAUDE.md §7):
- *   1. load watermark (last successful brief)   [TODO: from RunLog]
- *   2. collect from Slack + Jira + Gmail in parallel (fail-soft per source)
- *   3. normalise → BriefItem[]                   (connectors already do this)
- *   4. relevance filter (LLM)                    [TODO]
- *   5. context enrichment (LLM)                  [TODO]
- *   6. prioritise + recommend (LLM)              [TODO -> generateObject]
- *   7. render (email + Slack mrkdwn)             [TODO]
- *   8. deliver (Resend + Slack DM)               [TODO]
- *   9. persist watermark + seen ids + context    [TODO]
+ * Each step lives in its own module under ./steps for easy tracking:
+ *   1. resolveWatermark()  → the "since" instant                (watermark.step)
+ *   2. collectBoard()      → Section-2 active-sprint board       (collectBoard.step)
+ *   3. collectChanges()    → Section-1 changed items (fail-soft) (collectChanges.step)
+ *   4. analyseAndGuard()   → categorised BriefOutput + guards    (analyse.step)
+ *   5. renderBrief()       → email HTML + Slack mrkdwn           (render.service)
+ *   (8-9 deliver + persist: still to come.)
  *
- * This scaffold wires steps 2-3 (collection is fail-soft) and returns a
- * skeleton result so the endpoint and scheduler are exercisable end-to-end.
+ * Expected output: a RunBriefResult summarising the run and carrying the brief.
  */
 export async function runBrief(): Promise<RunBriefResult> {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000); // TODO: real watermark
-  const errors: string[] = [];
-
+  const since = resolveWatermark();
   logger.info({ since }, 'Starting morning-briefing run');
 
-  // Step 2 — collect in parallel, fail-soft: one source failing must not sink the brief.
-  const results = await Promise.allSettled([
-    collectSlackItems(since),
-    collectJiraItems(since),
-    collectGmailItems(since),
-  ]);
+  const errors: string[] = [];
 
-  const items: BriefItem[] = [];
-  const sourceNames = ['slack', 'jira', 'gmail'] as const;
-  results.forEach((r, i) => {
-    if (r.status === 'fulfilled') {
-      items.push(...r.value);
-    } else {
-      const msg = `${sourceNames[i]} collection failed: ${String(r.reason)}`;
-      logger.error({ err: r.reason }, msg);
+  // Step 3 — the board. If it failed, `board` is [] AND `boardError` is set; we
+  // must NOT later render that empty board as "no tickets" (it's unavailable,
+  // not empty), so we track the distinction explicitly.
+
+   // board -> [{ ticket:'EA-2729', status:'Dev In Progress', blocked:true, … }]
+  const { board, error: boardError } = await collectBoard();
+  if (boardError) errors.push(boardError);
+  const boardUnavailable = !!boardError;
+
+  // Step 2 — the changed items (fail-soft across sources).
+  const { items, errors: collectErrors } = await collectChanges(since);
+  errors.push(...collectErrors);
+
+  // Steps 4 & 5 — analyse + render. Only if an LLM key is configured and there
+  // is something to report; otherwise we return the raw preview (no key path).
+  let brief: BriefOutput | undefined;
+  let rendered: RenderedBrief | undefined;
+  const hasContent = items.length > 0 || board.length > 0;
+  if (llmAvailable() && hasContent) {
+    try {
+      brief = await analyseAndGuard(items, board);
+      rendered = renderBrief(brief, { boardUnavailable });
+    } catch (err) {
+      const msg = `AI analysis failed: ${String(err instanceof Error ? err.message : err)}`;
+      logger.error({ err }, msg);
       errors.push(msg);
     }
-  });
+  } else if (!llmAvailable()) {
+    logger.info('LLM not configured (no API key) — returning raw preview only');
+  }
 
-  // Steps 4-9 are not implemented yet — see the TODOs above.
-  logger.info({ itemCount: items.length, errors: errors.length }, 'Run complete (scaffold)');
+  logger.info({ itemCount: items.length, analysed: !!brief, errors: errors.length }, 'Run complete');
 
   return {
-    status: errors.length === 0 ? 'success' : errors.length === 3 ? 'failed' : 'partial',
+    status: errors.length === 0 ? 'success' : errors.length >= 3 ? 'failed' : 'partial',
     itemCount: items.length,
     errors,
+    preview: items.map((it) => ({ source: it.source, title: it.title, url: it.url })),
+    board,
+    brief,
+    rendered,
   };
 }

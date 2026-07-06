@@ -41,6 +41,9 @@ const schema = z.object({
   JIRA_BASE_URL: z.string().default('https://anatta-io.atlassian.net'),
   JIRA_EMAIL: z.string().optional(),
   JIRA_API_TOKEN: z.string().optional(),
+  // Optional — auto-resolved from the site if omitted. Scoped tokens route via
+  // https://api.atlassian.com/ex/jira/{cloudId}.
+  JIRA_CLOUD_ID: z.string().optional(),
   JIRA_PROJECT_KEYS: z.string().default('EA'),
   JIRA_BOARD_ID: z.coerce.number().optional(),
 
