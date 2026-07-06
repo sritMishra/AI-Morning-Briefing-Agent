@@ -39,6 +39,9 @@ const schema = z.object({
   SLACK_BOT_TOKEN: z.string().optional(),
   SLACK_DM_TARGET_USER_ID: z.string().optional(),
   SLACK_PROJECT_CHANNELS: z.string().default(''),
+  // Extra name spellings/nicknames to also match as plain-text references
+  // (my profile name is auto-included), e.g. "Sritam,Sam".
+  SLACK_NAME_ALIASES: z.string().default(''),
 
   // Jira
   JIRA_BASE_URL: z.string().default('https://anatta-io.atlassian.net'),
@@ -80,4 +83,9 @@ export const slackProjectChannels = env.SLACK_PROJECT_CHANNELS.split(',')
 /** Convenience: parsed list of Jira project keys. */
 export const jiraProjectKeys = env.JIRA_PROJECT_KEYS.split(',')
   .map((k) => k.trim())
+  .filter(Boolean);
+
+/** Convenience: extra name aliases to match as plain-text references. */
+export const slackNameAliases = env.SLACK_NAME_ALIASES.split(',')
+  .map((a) => a.trim())
   .filter(Boolean);

@@ -18,20 +18,39 @@ export function buildBriefSystemPrompt(userName?: string | null): string {
     `The items changed in the last 24h. They come from two sources — Jira tickets`,
     `(changed by someone other than ${you}) and Slack messages that @mention`,
     `${you}. For EACH item:`,
-    '  1. Read its content (Jira: comment thread + field changes; Slack: the message).',
+    '  1. Read its FULL content (Jira: comment thread + field changes; Slack: the',
+    '     message AND its thread if present).',
     `  2. Work out WHAT CHANGED, WHAT IS BEING ASKED, and whether ${you} must act.`,
     '  3. Write a concise `summary` (what happened + what is asked) and a specific',
     '     `recommendedAction`. Put brief history in `context` if it helps.',
-    '  4. Categorise into exactly one of: `urgent`, `important`, `notImportant`.',
+    '  4. If the item contains a real DISCUSSION (a Slack thread or a back-and-forth',
+    '     in Jira comments), populate `keyPoints` (3-6 bullets) breaking it down:',
+    '     the problem being solved, key decisions, open questions, and concrete',
+    `     action items — especially anything needing ${you}. OMIT keyPoints for`,
+    '     trivial one-line items (a simple mention, a lone status change).',
+    '  5. Categorise into exactly one of: `urgent`, `important`, `notImportant`.',
     '',
     'Categorisation rules (apply strictly):',
     '  JIRA:',
-    '  - urgent ONLY if: (a) the due date is TODAY or already past, OR (b) a comment',
-    `    explicitly needs an urgent action from ${you}, OR (c) a question directed`,
-    `    at ${you} has been unanswered by ${you} for more than a day.`,
+    '  - A ticket may be urgent ONLY if it is in the CURRENTLY ACTIVE sprint (each',
+    '    item shows "In ACTIVE sprint: YES/NO"). A ticket in a FUTURE sprint is',
+    '    never urgent — it is future work, not today\'s. Show it as important or',
+    '    notImportant (e.g. "new future-sprint assignment").',
+    '  - Within the active sprint, urgent ONLY if: (a) the due date is TODAY or',
+    `    past, OR (b) a comment explicitly needs an urgent action from ${you}, OR`,
+    `    (c) a question directed at ${you} has been unanswered by ${you} >1 day.`,
+    '  - A NEW ASSIGNMENT is NOT urgent by itself. Treat it as urgent/"start now"',
+    '    ONLY if someone explicitly asks you to begin AND there is no blocker. If',
+    '    the description is just a plan, or there is a blocker, or no explicit',
+    '    go-ahead, do NOT say "begin work" — say it is assigned/planned and note',
+    '    what is pending (blocker, awaiting readiness).',
     '  - BLOCKED tickets (flagged "Blocked: YES") are NEVER urgent — put them in',
     '    important/notImportant with a short "blocked for <reason>" note.',
     '  SLACK:',
+    `  - Items may be an explicit @mention OR an UNTAGGED reference to ${you} by`,
+    `    name (see each item\'s "Reference:" line). Surface both, but an untagged`,
+    `    reference is often a discussion ABOUT ${you}/your work — judge whether it`,
+    `    actually needs your input before marking it urgent.`,
     `  - urgent: a direct question or an explicit action requested of ${you}.`,
     '  - important: a thread I am part of has meaningful new activity to review.',
     `  - notImportant: broadcasts (@here/@channel) or FYI mentions with nothing for`,
@@ -51,10 +70,21 @@ export function buildBriefSystemPrompt(userName?: string | null): string {
   ].join('\n');
 }
 
+/** Keep each item's context bounded so a busy day can't blow the token/min limit. */
+const MAX_ITEM_CONTEXT_CHARS = 1500;
+
 /** Serialise the collected material into the user prompt for this run. */
 export function buildBriefUserPrompt(items: BriefItem[], board: BoardTicket[]): string {
   const section1 = items.length
-    ? items.map((it, i) => `--- Item ${i + 1} — ${it.title}\nURL: ${it.url ?? 'n/a'}\n${it.rawContext}`).join('\n\n')
+    ? items
+        .map((it, i) => {
+          const ctx =
+            it.rawContext.length > MAX_ITEM_CONTEXT_CHARS
+              ? `${it.rawContext.slice(0, MAX_ITEM_CONTEXT_CHARS)}…[truncated]`
+              : it.rawContext;
+          return `--- Item ${i + 1} — ${it.title}\nURL: ${it.url ?? 'n/a'}\n${ctx}`;
+        })
+        .join('\n\n')
     : '(nothing changed by others in the last 24h)';
 
   const section2 = board.length

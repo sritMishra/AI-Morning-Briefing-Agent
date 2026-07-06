@@ -89,6 +89,33 @@ export function enforceDueDateUrgent(brief: BriefOutput, dueUrgentKeys: Set<stri
 }
 
 /**
+ * Deterministic guard: a Jira ticket that is NOT in the currently active sprint
+ * (e.g. assigned to a future sprint) must never be urgent — future work isn't
+ * "today's work". Move such items from urgent into important so they're still
+ * seen, just not flagged critical.
+ */
+export function enforceActiveSprintUrgent(
+  brief: BriefOutput,
+  nonActiveSprintKeys: Set<string>,
+): BriefOutput {
+  if (!nonActiveSprintKeys.size) return brief;
+
+  const moved: BriefOutput['urgent'] = [];
+  const urgent = brief.urgent.filter((it) => {
+    const k = keyOf(it);
+    if (k && nonActiveSprintKeys.has(k)) {
+      moved.push(it);
+      return false;
+    }
+    return true;
+  });
+  if (!moved.length) return brief;
+
+  logger.warn({ moved: moved.map(keyOf) }, 'Enforced active-sprint: demoted future-sprint items');
+  return { ...brief, urgent, important: [...moved, ...brief.important] };
+}
+
+/**
  * Deterministic guard: a blocked ticket must NEVER sit in `urgent`, no matter
  * what the LLM decided. Move any blocked item from urgent into important. Hard
  * business rules are enforced in code, not left to the model's discretion.

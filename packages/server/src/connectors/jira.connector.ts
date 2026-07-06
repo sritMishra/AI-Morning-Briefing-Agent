@@ -67,6 +67,11 @@ function isDueUrgent(duedate?: string | null): boolean {
   return new Date(duedate).getTime() < startOfTomorrow.getTime() + 24 * 60 * 60 * 1000;
 }
 
+interface SprintInfo {
+  name?: string;
+  state?: string; // 'active' | 'future' | 'closed'
+}
+
 interface JiraIssue {
   key: string;
   fields: {
@@ -79,7 +84,43 @@ interface JiraIssue {
     duedate?: string | null;
     assignee?: { displayName?: string } | null;
     labels?: string[];
+    // Custom fields (e.g. the Sprint field) accessed by id at runtime.
+    [customField: string]: unknown;
   };
+}
+
+// The Sprint custom field id (e.g. customfield_10020), discovered once.
+let sprintFieldId: string | null = null;
+async function getSprintFieldId(): Promise<string> {
+  if (sprintFieldId) return sprintFieldId;
+  const c = await jira();
+  if (!c) return 'customfield_10020';
+  try {
+    const { data } = await c.get('/field');
+    const f = (data as { id: string; name?: string; schema?: { custom?: string } }[]).find(
+      (x) => x.schema?.custom === 'com.pyxis.greenhopper.jira:gh-sprint' || x.name === 'Sprint',
+    );
+    sprintFieldId = f?.id ?? 'customfield_10020';
+  } catch {
+    sprintFieldId = 'customfield_10020';
+  }
+  return sprintFieldId;
+}
+
+function sprintsOf(issue: JiraIssue): SprintInfo[] {
+  const v = sprintFieldId ? issue.fields[sprintFieldId] : undefined;
+  return Array.isArray(v) ? (v as SprintInfo[]) : [];
+}
+
+/** True only if the ticket is in the CURRENTLY ACTIVE sprint (not a future one). */
+function isInActiveSprint(issue: JiraIssue): boolean {
+  return sprintsOf(issue).some((s) => s.state === 'active');
+}
+
+/** Human label of the ticket's sprint(s), e.g. "Edible Sprint 10 (future)". */
+function sprintLabel(issue: JiraIssue): string {
+  const s = sprintsOf(issue);
+  return s.length ? s.map((x) => `${x.name ?? '?'} (${x.state ?? '?'})`).join(', ') : 'none';
 }
 
 interface ChangelogHistory {
@@ -283,9 +324,11 @@ async function getIssueDetail(key: string, changeSince: Date, me: string | null)
 /** Build the human/LLM-facing context blob for a changed ticket. */
 function buildContext(issue: JiraIssue, detail: IssueDetail, blocked: boolean): string {
   const f = issue.fields;
+  const inActive = isInActiveSprint(issue);
   const lines = [
     `${issue.key}: ${f.summary}`,
     `Type: ${f.issuetype?.name ?? '?'} · Status: ${f.status?.name ?? '?'} · Priority: ${f.priority?.name ?? '?'}`,
+    `Sprint: ${sprintLabel(issue)} · In ACTIVE sprint: ${inActive ? 'YES' : 'NO (future/backlog)'}`,
     `Blocked: ${blocked ? 'YES' : 'no'}`,
   ];
   if (f.duedate) lines.push(`Due: ${f.duedate}`);
@@ -310,6 +353,7 @@ function mapIssue(issue: JiraIssue, detail: IssueDetail, blocked: boolean): Brie
     participants: f.assignee?.displayName ? [f.assignee.displayName] : [],
     blocked,
     dueUrgent: isDueUrgent(f.duedate),
+    inActiveSprint: isInActiveSprint(issue),
   };
 }
 
@@ -324,9 +368,10 @@ export async function collectJiraItems(since: Date): Promise<BriefItem[]> {
   if (!(await jira())) return [];
 
   const me = await getMyDisplayName();
+  const sf = await getSprintFieldId(); // include the Sprint field so we can read its state
   const minutesAgo = Math.max(1, Math.round((Date.now() - since.getTime()) / 60_000));
   const jql = `${PROJECT_CLAUSE} AND assignee = currentUser() AND updated >= "-${minutesAgo}m" ORDER BY updated DESC`;
-  const candidates = await searchIssues(jql);
+  const candidates = await searchIssues(jql, [...FIELDS, sf]);
 
   const detailed = await Promise.all(
     candidates.map(async (issue) => ({ issue, detail: await getIssueDetail(issue.key, since, me) })),
@@ -352,15 +397,18 @@ export interface BoardTicket {
 }
 
 /**
- * ACTIVE SPRINT — my non-done tickets in the open sprint, as flat rows for the
- * board table (Section 2). Status is exact; blocked = status or *block* label;
- * overdue = due date before today.
+ * ACTIVE SPRINT — my non-done tickets in the CURRENTLY ACTIVE sprint, as flat
+ * rows for the board table (Section 2). We query openSprints() (active+future)
+ * then filter to sprints whose state is `active`, so future-sprint tickets
+ * (e.g. Sprint 10 while Sprint 9 is active) are excluded. Status is exact;
+ * blocked = status or *block* label; overdue = due date before today.
  */
 export async function getActiveSprintSnapshot(): Promise<BoardTicket[]> {
   if (!(await jira())) return [];
 
+  const sf = await getSprintFieldId(); // need the Sprint field to read its state
   const jql = `${PROJECT_CLAUSE} AND assignee = currentUser() AND sprint IN openSprints() ORDER BY status`;
-  const issues = await searchIssues(jql);
+  const issues = await searchIssues(jql, [...FIELDS, sf]);
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
@@ -370,6 +418,7 @@ export async function getActiveSprintSnapshot(): Promise<BoardTicket[]> {
   for (const issue of issues) {
     const f = issue.fields;
     if (f.status?.statusCategory?.key === 'done') continue; // completed — not actionable today
+    if (!isInActiveSprint(issue)) continue; // exclude future/planned-sprint tickets
     const dueMs = f.duedate ? new Date(f.duedate).getTime() : undefined;
     tickets.push({
       ticket: issue.key,

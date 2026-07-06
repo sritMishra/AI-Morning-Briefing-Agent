@@ -23,14 +23,25 @@ export interface BriefItem {
   blocked?: boolean;
   /** True if due today or already past — used to deterministically force it urgent. */
   dueUrgent?: boolean;
+  /** True only if in the currently ACTIVE sprint — a future-sprint ticket is never urgent. */
+  inActiveSprint?: boolean;
 }
 
 /** Zod schema for the LLM's structured brief output (used with generateObject). */
 export const briefItemOutputSchema = z.object({
   title: z.string(),
   source: z.enum(['slack', 'jira', 'gmail']),
-  summary: z.string().describe('1-2 sentence "what happened"'),
+  summary: z.string().describe('1-2 sentence "what happened + what is asked"'),
   context: z.string().optional().describe('brief history so I need not re-read everything'),
+  /**
+   * For items with a real DISCUSSION (a Slack thread or Jira comment exchange):
+   * the concrete points that matter — decisions, open questions, action items,
+   * the problem being solved. Omitted for trivial items.
+   */
+  keyPoints: z
+    .array(z.string())
+    .optional()
+    .describe('discussion breakdown: decisions / open questions / action items / the problem'),
   recommendedAction: z.string().describe('specific suggestion; the user makes the final call'),
   link: z.string().optional(),
 });

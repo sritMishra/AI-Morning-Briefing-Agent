@@ -14,7 +14,14 @@ const mockBrief: BriefOutput = {
       link: 'https://anatta-io.atlassian.net/browse/EA-2729',
     },
   ],
-  important: [],
+  important: [
+    {
+      title: 'int-ea-middleware — @ekta mentioned you',
+      source: 'slack',
+      summary: 'Ekta asked about the Celigo proxy.',
+      recommendedAction: 'Reply to Ekta.',
+    },
+  ],
   notImportant: [],
   board: [
     { ticket: 'EA-2729', status: 'Dev In Progress', recommendation: 'On track — continue' },
@@ -37,12 +44,15 @@ describe('renderBrief', () => {
     expect(out.slack).toContain("Today's board");
   });
 
-  it('html output includes both sections and the board table', () => {
+  it('groups into Jira and Slack spaces, plus the board table', () => {
     expect(out.html).toContain('Morning Brief');
+    expect(out.html).toContain('🎫 Jira');
+    expect(out.html).toContain('💬 Slack');
     expect(out.html).toContain('Urgent');
+    expect(out.html).toContain('EA-2729'); // jira urgent item
+    expect(out.html).toContain('@ekta'); // slack important item
     expect(out.html).toContain("Today's Board");
     expect(out.html).toContain('<table');
-    expect(out.html).toContain('Overdue &amp; blocked — chase the blocker');
   });
 
   it('shows "board unavailable" (not "no tickets") when the fetch failed', () => {

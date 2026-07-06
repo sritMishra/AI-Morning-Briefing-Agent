@@ -26,6 +26,7 @@ function slackItem(it: BriefItemOut): string {
   const src = SOURCE_EMOJI[it.source] ?? '•';
   const lines = [`*${it.title}* ${src}`, it.summary];
   if (it.context) lines.push(`_Context:_ ${it.context}`);
+  if (it.keyPoints?.length) lines.push(it.keyPoints.map((p) => `  • ${p}`).join('\n'));
   lines.push(`_Action:_ ${it.recommendedAction}`);
   if (it.link) lines.push(`<${it.link}|open>`);
   return lines.join('\n');
@@ -36,18 +37,43 @@ function slackBucket(heading: string, items: BriefItemOut[]): string {
   return `\n${heading}\n${items.map(slackItem).join('\n\n')}`;
 }
 
-function renderSlack(b: BriefOutput, dateStr: string, boardUnavailable: boolean): string {
-  const parts: string[] = [`:sunny: *MORNING BRIEF — ${dateStr}*`];
+interface Buckets {
+  urgent: BriefItemOut[];
+  important: BriefItemOut[];
+  notImportant: BriefItemOut[];
+}
 
-  parts.push('\n*— Changed in the last 24h —*');
-  const s1 = [
-    slackBucket(':red_circle: *URGENT*', b.urgent),
-    slackBucket(':large_yellow_circle: *IMPORTANT*', b.important),
-    slackBucket(':white_circle: *Not important*', b.notImportant),
+/** Split a brief's categorised items into one space per source (jira/slack). */
+function bySource(b: BriefOutput, source: string): Buckets {
+  return {
+    urgent: b.urgent.filter((i) => i.source === source),
+    important: b.important.filter((i) => i.source === source),
+    notImportant: b.notImportant.filter((i) => i.source === source),
+  };
+}
+
+function bucketsEmpty(x: Buckets): boolean {
+  return !x.urgent.length && !x.important.length && !x.notImportant.length;
+}
+
+function slackSpace(title: string, x: Buckets): string {
+  if (bucketsEmpty(x)) return `\n*${title}*\n_Nothing new._`;
+  const inner = [
+    slackBucket(':red_circle: *Urgent*', x.urgent),
+    slackBucket(':large_yellow_circle: *Important*', x.important),
+    slackBucket(':white_circle: *Not important*', x.notImportant),
   ]
     .filter(Boolean)
     .join('\n');
-  parts.push(s1 || '_No changes from others in the last 24h._');
+  return `\n*${title}*\n${inner}`;
+}
+
+function renderSlack(b: BriefOutput, dateStr: string, boardUnavailable: boolean): string {
+  const parts: string[] = [`:sunny: *MORNING BRIEF — ${dateStr}*`];
+
+  // Two spaces, each with its own priority buckets.
+  parts.push(slackSpace('🎫 JIRA — changed in 24h', bySource(b, 'jira')));
+  parts.push(slackSpace('💬 SLACK — changed in 24h', bySource(b, 'slack')));
 
   parts.push("\n:clipboard: *Today's board (EA · active sprint)*");
   if (boardUnavailable) {
@@ -75,6 +101,9 @@ function htmlItem(it: BriefItemOut): string {
     `<div style="font-weight:600">${esc(it.title)} ${src}</div>`,
     `<div>${esc(it.summary)}</div>`,
     it.context ? `<div style="color:#555"><em>Context:</em> ${esc(it.context)}</div>` : '',
+    it.keyPoints?.length
+      ? `<ul style="margin:4px 0">${it.keyPoints.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>`
+      : '',
     `<div><em>Action:</em> ${esc(it.recommendedAction)}</div>`,
     it.link ? `<div><a href="${esc(it.link)}">open</a></div>` : '',
     `</div>`,
@@ -88,16 +117,20 @@ function htmlBucket(title: string, color: string, items: BriefItemOut[]): string
     .join('')}`;
 }
 
-function renderHtml(b: BriefOutput, dateStr: string, boardUnavailable: boolean): string {
-  const s1 =
-    [
-      htmlBucket('🔴 Urgent', '#c0392b', b.urgent),
-      htmlBucket('🟡 Important', '#b9770e', b.important),
-      htmlBucket('⚪ Not important', '#666', b.notImportant),
-    ]
-      .filter(Boolean)
-      .join('') || '<p style="color:#666">No changes from others in the last 24h.</p>';
+function htmlSpace(title: string, x: Buckets): string {
+  const inner = bucketsEmpty(x)
+    ? '<p style="color:#666">Nothing new.</p>'
+    : [
+        htmlBucket('🔴 Urgent', '#c0392b', x.urgent),
+        htmlBucket('🟡 Important', '#b9770e', x.important),
+        htmlBucket('⚪ Not important', '#666', x.notImportant),
+      ]
+        .filter(Boolean)
+        .join('');
+  return `<h3 style="margin:24px 0 8px;border-bottom:2px solid #eee;padding-bottom:4px">${title}</h3>${inner}`;
+}
 
+function renderHtml(b: BriefOutput, dateStr: string, boardUnavailable: boolean): string {
   const rows = b.board
     .map(
       (r) =>
@@ -120,8 +153,9 @@ function renderHtml(b: BriefOutput, dateStr: string, boardUnavailable: boolean):
   return [
     `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:680px;margin:0 auto;color:#111">`,
     `<h2>☀️ Morning Brief — ${esc(dateStr)}</h2>`,
-    `<h3 style="margin:24px 0 4px">Changed in the last 24h</h3>`,
-    s1,
+    `<p style="color:#666;margin:0 0 8px">Changed in the last 24h, by space:</p>`,
+    htmlSpace('🎫 Jira', bySource(b, 'jira')),
+    htmlSpace('💬 Slack', bySource(b, 'slack')),
     `<h3 style="margin:28px 0 8px">📋 Today's Board (EA · active sprint)</h3>`,
     table,
     `</div>`,
