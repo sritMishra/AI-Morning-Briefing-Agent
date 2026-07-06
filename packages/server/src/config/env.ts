@@ -20,6 +20,9 @@ const schema = z.object({
   // Scheduling
   BRIEF_CRON: z.string().default('15 10 * * *'),
   BRIEF_TZ: z.string().default('Asia/Kolkata'),
+  // Look-back window in hours (default 24). A build-time knob for testing with
+  // a wider window; superseded by the real RunLog watermark once persistence lands.
+  BRIEF_LOOKBACK_HOURS: z.coerce.number().default(24),
 
   // Database
   DATABASE_URL: z.string().optional(),
