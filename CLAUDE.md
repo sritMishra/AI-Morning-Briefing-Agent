@@ -63,11 +63,11 @@ Scoped to the **Edible Arrangements (`EA`)** project. Two distinct views:
 - Config: `JIRA_PROJECT_KEYS=EA`. Active sprint resolved via JQL
   `openSprints()` (avoids the extra Agile-API scopes).
 
-### 3. Gmail (Phase 1 — **unread emails only**)
-- Reads only **unread ("unopened") emails** (`is:unread`), treated as a
-  first-class source alongside Slack and Jira.
-- Read-only OAuth (`gmail.readonly`) — analysing does not mark mail read.
-- Capped per run if the unread backlog is large (report the cap).
+### 3. Gmail — **DESCOPED (not implemented)**
+Deliberately dropped. Rationale: work email is largely a *notification mirror*
+of Slack + Jira (redundant), and personal email is too private to route through
+a server-side LLM. The `gmail.connector.ts` stub returns `[]` and is inert.
+(Can be revisited later if a genuine non-redundant need appears.)
 
 ### 4. Microsoft Teams (Phase 2 — future)
 - Client-side communication channel; read-only, same pattern as Slack.

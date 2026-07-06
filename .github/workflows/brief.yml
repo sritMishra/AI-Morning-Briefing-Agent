@@ -1,0 +1,45 @@
+name: Morning Brief
+
+on:
+  schedule:
+    # 10:15 IST = 04:45 UTC (GitHub cron runs in UTC and may drift a few minutes).
+    - cron: '45 4 * * *'
+  workflow_dispatch: {} # adds a manual "Run workflow" button in the Actions tab
+
+# Prevent overlapping runs (e.g. a manual run during the scheduled one).
+concurrency:
+  group: morning-brief
+  cancel-in-progress: false
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the morning brief
+        working-directory: packages/server
+        run: npm run brief
+        env:
+          NODE_ENV: production
+          LOG_LEVEL: info
+          # ── Secrets (add these in repo Settings → Secrets and variables → Actions) ──
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          SLACK_USER_TOKEN: ${{ secrets.SLACK_USER_TOKEN }}
+          SLACK_PROJECT_CHANNELS: ${{ secrets.SLACK_PROJECT_CHANNELS }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BRIEF_TO_EMAIL: ${{ secrets.BRIEF_TO_EMAIL }}
+          # ── Optional (safe to leave unset) ──
+          SLACK_NAME_ALIASES: ${{ secrets.SLACK_NAME_ALIASES }}
+          BRIEF_FROM_EMAIL: ${{ secrets.BRIEF_FROM_EMAIL }}
