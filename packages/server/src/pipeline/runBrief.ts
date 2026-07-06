@@ -1,6 +1,7 @@
 import type { BoardTicket } from '../connectors/jira.connector.js';
 import { logger } from '../lib/logger.js';
 import { llmAvailable } from '../services/analyze.service.js';
+import { deliverBriefEmail, emailConfigured } from '../services/deliver.service.js';
 import { type RenderedBrief, renderBrief } from '../services/render.service.js';
 import type { BriefOutput } from '../types/index.js';
 import { analyseAndGuard } from './steps/analyse.step.js';
@@ -19,6 +20,8 @@ export interface RunBriefResult {
   brief?: BriefOutput;
   /** The brief rendered for delivery (email + Slack DM), present when analysed. */
   rendered?: RenderedBrief;
+  /** Whether the brief email was actually sent this run. */
+  delivered?: boolean;
 }
 
 /**
@@ -71,7 +74,18 @@ export async function runBrief(): Promise<RunBriefResult> {
     logger.info('LLM not configured (no API key) — returning raw preview only');
   }
 
-  logger.info({ itemCount: items.length, analysed: !!brief, errors: errors.length }, 'Run complete');
+  // Step 8 — deliver the brief by email (skipped silently if not configured).
+  let delivered = false;
+  if (rendered && emailConfigured()) {
+    const res = await deliverBriefEmail(rendered);
+    delivered = res.delivered;
+    if (res.error) errors.push(res.error);
+  }
+
+  logger.info(
+    { itemCount: items.length, analysed: !!brief, delivered, errors: errors.length },
+    'Run complete',
+  );
 
   return {
     status: errors.length === 0 ? 'success' : errors.length >= 3 ? 'failed' : 'partial',
@@ -81,5 +95,7 @@ export async function runBrief(): Promise<RunBriefResult> {
     board,
     brief,
     rendered,
+    delivered,
   };
 }
+
